@@ -1,0 +1,9 @@
+
+USE master;
+GO
+GRANT CREATE DATABASE TO [testor];
+GO
+
+-----------------
+
+
