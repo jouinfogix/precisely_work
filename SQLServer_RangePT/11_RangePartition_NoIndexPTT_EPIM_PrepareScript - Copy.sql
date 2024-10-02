@@ -1,0 +1,353 @@
+
+
+SET NOCOUNT ON;
+
+DECLARE 
+		@NumOfSelectedRepositoryToPartition INT = 10  /* Pick up TOP 10 largest Repository */
+		,@DatabaseName VARCHAR(100) = 'EPIM'
+		,@MainTableName VARCHAR(100) = 'B_MASTER_REPOSITORY_ITEM'
+        ,@GroupFileLocation VARCHAR(1000) = 'C:\Program Files\Microsoft SQL Server\MSSQL15.MSSQLSERVER\MSSQL\DATA\EPIM_Data' --Must End with "\"
+		,@IndexGroupFileLocation VARCHAR(1000) = 'C:\Program Files\Microsoft SQL Server\MSSQL15.MSSQLSERVER\MSSQL\DATA\EPIM_Data' --Must End with "\"
+		;
+		/* RDS always has fixed GroupFileLocation: D:\rdsdbdata\DATA\  */
+		DECLARE @IsRDS BIT;
+		SELECT @IsRDS  = CAST(SERVERPROPERTY('IsHadrEnabled') AS BIT);
+
+		IF @IsRDS = 1
+		BEGIN
+		 SET @GroupFileLocation = 'D:\rdsdbdata\DATA\';
+		 SET @IndexGroupFileLocation = 'D:\rdsdbdata\DATA\';
+		END;
+
+
+/*** The Above parameters must be filled in accordingly ***/
+
+/*** Below parameters are option ***/
+DECLARE
+		@PartitionFuncName VARCHAR(100) = 'mPartitionFunction',
+		@PartitionSchemeName VARCHAR(100) = 'mPartitionScheme',
+
+		@FileGroupName VARCHAR(100) = 'b_mst_repo_itm_fgp',
+		@FileName VARCHAR(100) = 'b_mst_repo_itm_file',
+		@FileLogicName VARCHAR(100) = 'b_mst_repo_itm_file',
+		@FileSIZE VARCHAR(10) = '100MB',
+		@FileMAXSIZE VARCHAR(20) = 'UNLIMITED',
+		@FileFILEGROWTH VARCHAR(20) = '100MB',
+		
+		
+		@IndexFileGroupName VARCHAR(100) = 'b_mst_repo_itm_idxfgp',
+		@IndexFileName VARCHAR(100) = 'b_mst_repo_itm_idxfile',
+		@IndexFileLogicName VARCHAR(100) = 'b_mst_repo_itm_idxfile',
+		@IndexFileSIZE VARCHAR(10) = '100MB',
+		@IndexFileMAXSIZE VARCHAR(20) = 'UNLIMITED',
+		@IndexFileFILEGROWTH VARCHAR(20) = '100MB';
+
+/*** Do not change the parameters below ***/
+DECLARE
+		@ClusterIndexName VARCHAR(100) = 'B_MASTER_REP_ITEM_REPOSITORY_ID',
+		@PrimaryKeyColumn VARCHAR(100) = 'ITEM_ID',
+		@RangePartitionColumn VARCHAR(100) = 'REPOSITORY_ID',
+		@FullTextColumnName VARCHAR(100),
+		@SQL_DropFullTextIndex VARCHAR(1000) = '',
+		@SQL_CreateFullTextIndex VARCHAR(1000) = '',
+
+		@PartitionColumn_IS_NULLABLE VARCHAR(5) = 'YES',
+		@PartitionColumn_DefaultValue VARCHAR(2) = '-1',
+		@PartitionColumn_DataType VARCHAR(10) = 'BIGINT',
+	  
+		@NumOfFileGroup INT = 1,
+		@CurrentRep_ID BIGINT,
+		@PrevioustRep_ID BIGINT = 0,
+		--@PrimaryKeyFileGroupName VARCHAR(50),
+		@PrimaryKeyConstraintName VARCHAR(100),
+		@NewLine VARCHAR(15) = CHAR(13) + CHAR(10),
+		@SQL_CreateVew VARCHAR(MAX)='',
+		@SQL_PartitionFunction VARCHAR(MAX) = '',
+		@SQL_PartitionScheme VARCHAR(MAX) = '',
+		@SQL_FileGroup VARCHAR(MAX) = '',
+
+		@SQL_IndexFileGroup VARCHAR(MAX) = '',
+		@SQL_CreateClusteredIndex VARCHAR(MAX) = '',
+		@SQL_IndexPartition VARCHAR(MAX) = '';
+
+		SET @GroupFileLocation = TRIM(@GroupFileLocation);
+		SET @GroupFileLocation = CASE WHEN RIGHT(@GroupFileLocation, 1) <> '\' AND RIGHT(@GroupFileLocation, 1) <> '/' THEN @GroupFileLocation + '\' ELSE @GroupFileLocation END;
+
+		SET @IndexGroupFileLocation = TRIM(@IndexGroupFileLocation);
+		SET @IndexGroupFileLocation = CASE WHEN RIGHT(@IndexGroupFileLocation, 1) <> '\' AND RIGHT(@IndexGroupFileLocation, 1) <> '/' THEN @IndexGroupFileLocation + '\' ELSE @IndexGroupFileLocation END;
+
+
+DECLARE @temp AS TABLE (REPOSITORY_ID BIGINT);
+
+INSERT INTO @temp
+SELECT TOP(@NumOfSelectedRepositoryToPartition) REPOSITORY_ID FROM 
+(SELECT REPOSITORY_ID, count(*) as cnt FROM [dbo].[B_MASTER_REPOSITORY_ITEM]
+GROUP BY REPOSITORY_ID ) AS X
+ORDER BY X.cnt DESC
+
+SET @SQL_IndexFileGroup = @SQL_IndexFileGroup + @NewLine + 'ALTER DATABASE ' + QUOTENAME(@DatabaseName) + ' ADD FILEGROUP ' + QUOTENAME(@IndexFileGroupName) + ';';
+SET @SQL_IndexFileGroup = @SQL_IndexFileGroup + @NewLine + 'ALTER DATABASE ' + QUOTENAME(@DatabaseName) + ' ADD FILE (NAME = ' + QUOTENAME(@IndexFileLogicName) + ',';
+SET @SQL_IndexFileGroup = @SQL_IndexFileGroup + @NewLine + '     FILENAME = ''' + @IndexGroupFileLocation + @IndexFileName + '.ndf'',';
+SET @SQL_IndexFileGroup = @SQL_IndexFileGroup + @NewLine + '     SIZE = ' + @IndexFileSIZE + ', MAXSIZE = ' + @IndexFileMAXSIZE + ',FILEGROWTH = ' + @IndexFileFILEGROWTH + ' ) TO FILEGROUP ' + QUOTENAME(@IndexFileGroupName) + ';'
+
+
+SET @SQL_PartitionFunction = 'CREATE PARTITION FUNCTION ' + QUOTENAME(@PartitionFuncName) + ' (BIGINT) AS RANGE LEFT FOR VALUES (0';
+
+SET @SQL_PartitionScheme = 'CREATE PARTITION SCHEME ' + QUOTENAME(@PartitionSchemeName) + ' AS PARTITION ' + QUOTENAME(@PartitionFuncName) + ' TO (' + QUOTENAME(@FileGroupName + CAST(@NumOfFileGroup AS VARCHAR(10))) ;
+
+SET @SQL_FileGroup = @SQL_FileGroup + @NewLine + 'ALTER DATABASE ' + QUOTENAME(@DatabaseName) + ' ADD FILEGROUP ' + QUOTENAME(@FileGroupName + CAST(@NumOfFileGroup AS VARCHAR(10))) + ';';
+SET @SQL_FileGroup = @SQL_FileGroup + @NewLine + 'ALTER DATABASE ' + QUOTENAME(@DatabaseName) + ' ADD FILE (NAME = ' + QUOTENAME(@FileLogicName + CAST(@NumOfFileGroup AS VARCHAR(10))) + ',';
+SET @SQL_FileGroup = @SQL_FileGroup + @NewLine + '     FILENAME = ''' + @GroupFileLocation + @FileName + CAST(@NumOfFileGroup AS VARCHAR(10)) + '.ndf'',';
+SET @SQL_FileGroup = @SQL_FileGroup + @NewLine + '     SIZE = ' + @FileSIZE + ', MAXSIZE = ' + @FileMAXSIZE + ',FILEGROWTH = ' + @FileFILEGROWTH + ' ) TO FILEGROUP ' + QUOTENAME(@FileGroupName + CAST(@NumOfFileGroup AS VARCHAR(10))) + ';'
+
+
+SET @NumOfFileGroup = @NumOfFileGroup + 1;
+SET @SQL_PartitionScheme = @SQL_PartitionScheme + ',' + QUOTENAME(@FileGroupName + CAST(@NumOfFileGroup AS VARCHAR(10)));
+SET @SQL_FileGroup = @SQL_FileGroup + @NewLine + 'ALTER DATABASE ' + QUOTENAME(@DatabaseName) + ' ADD FILEGROUP ' + QUOTENAME(@FileGroupName + CAST(@NumOfFileGroup AS VARCHAR(10))) + ';';
+SET @SQL_FileGroup = @SQL_FileGroup + @NewLine + 'ALTER DATABASE ' + QUOTENAME(@DatabaseName) + ' ADD FILE (NAME = ' + QUOTENAME(@FileLogicName + CAST(@NumOfFileGroup AS VARCHAR(10))) + ',';
+SET @SQL_FileGroup = @SQL_FileGroup + @NewLine + '     FILENAME = ''' + @GroupFileLocation + @FileName + CAST(@NumOfFileGroup AS VARCHAR(10)) + '.ndf'',';
+SET @SQL_FileGroup = @SQL_FileGroup + @NewLine + '     SIZE = ' + @FileSIZE + ', MAXSIZE = ' + @FileMAXSIZE + ',FILEGROWTH = ' + @FileFILEGROWTH + ' ) TO FILEGROUP ' + QUOTENAME(@FileGroupName + CAST(@NumOfFileGroup AS VARCHAR(10))) + ';'
+
+
+DECLARE db_cursor CURSOR FOR 
+SELECT REPOSITORY_ID 
+FROM @temp 
+ORDER BY REPOSITORY_ID;
+
+OPEN db_cursor  
+FETCH NEXT FROM db_cursor INTO @CurrentRep_ID  
+
+WHILE @@FETCH_STATUS = 0  
+BEGIN  
+
+	  SET @SQL_PartitionFunction = @SQL_PartitionFunction + ',';
+
+	  /* If it's the first loop  OR Current REPOSITORY_ID is larger more than 1 then previous REPOSITRY_ID, we need to add additional FileGroup */
+	  IF (@PrevioustRep_ID < @CurrentRep_ID - 1 AND @PrevioustRep_ID > 0) OR @PrevioustRep_ID = 0
+	  BEGIN
+		SET @SQL_PartitionFunction = @SQL_PartitionFunction + CAST(@CurrentRep_ID - 1 AS VARCHAR(20)) + ',';
+		SET @NumOfFileGroup = @NumOfFileGroup + 1;
+		SET @SQL_PartitionScheme = @SQL_PartitionScheme + ', ' + QUOTENAME(@FileGroupName + CAST(@NumOfFileGroup AS VARCHAR(10))) ;
+
+		SET @SQL_FileGroup = @SQL_FileGroup + @NewLine + 'ALTER DATABASE ' + QUOTENAME(@DatabaseName) + ' ADD FILEGROUP ' + QUOTENAME(@FileGroupName + CAST(@NumOfFileGroup AS VARCHAR(10))) + ';';
+		SET @SQL_FileGroup = @SQL_FileGroup + @NewLine + 'ALTER DATABASE ' + QUOTENAME(@DatabaseName) + ' ADD FILE (NAME = ' + QUOTENAME(@FileLogicName + CAST(@NumOfFileGroup AS VARCHAR(10))) + ',';
+		SET @SQL_FileGroup = @SQL_FileGroup + @NewLine + '     FILENAME = ''' + @GroupFileLocation + @FileName + CAST(@NumOfFileGroup AS VARCHAR(10)) + '.ndf'',';
+		SET @SQL_FileGroup = @SQL_FileGroup + @NewLine + '     SIZE = ' + @FileSIZE + ', MAXSIZE = ' + @FileMAXSIZE + ',FILEGROWTH = ' + @FileFILEGROWTH + ' ) TO FILEGROUP ' + QUOTENAME(@FileGroupName + CAST(@NumOfFileGroup AS VARCHAR(10))) + ';'
+
+	  END;
+	 
+	  SET @SQL_PartitionFunction = @SQL_PartitionFunction + CAST(@CurrentRep_ID AS VARCHAR(20));
+
+	  SET @NumOfFileGroup = @NumOfFileGroup + 1;
+	  SET @SQL_PartitionScheme = @SQL_PartitionScheme + ', ' + QUOTENAME(@FileGroupName + CAST(@NumOfFileGroup AS VARCHAR(10)));
+
+	  SET @SQL_FileGroup = @SQL_FileGroup + @NewLine + 'ALTER DATABASE ' + QUOTENAME(@DatabaseName) + ' ADD FILEGROUP ' + QUOTENAME(@FileGroupName + CAST(@NumOfFileGroup AS VARCHAR(10))) + ';';
+	  SET @SQL_FileGroup = @SQL_FileGroup + @NewLine + 'ALTER DATABASE ' + QUOTENAME(@DatabaseName) + ' ADD FILE (NAME =' + QUOTENAME(@FileLogicName + CAST(@NumOfFileGroup AS VARCHAR(10))) + ',';
+	  SET @SQL_FileGroup = @SQL_FileGroup + @NewLine + '     FILENAME = ''' + @GroupFileLocation + @FileName + CAST(@NumOfFileGroup AS VARCHAR(10)) + '.ndf'',';
+	  SET @SQL_FileGroup = @SQL_FileGroup + @NewLine + '     SIZE = ' + @FileSIZE + ', MAXSIZE = ' + @FileMAXSIZE + ', FILEGROWTH = ' + @FileFILEGROWTH + ' ) TO FILEGROUP ' + QUOTENAME(@FileGroupName + CAST(@NumOfFileGroup AS VARCHAR(10))) + ';'
+	  
+	  SET @PrevioustRep_ID = @CurrentRep_ID;
+	  
+      FETCH NEXT FROM db_cursor INTO @CurrentRep_ID 
+END 
+CLOSE db_cursor  
+DEALLOCATE db_cursor
+
+--SELECT 
+--    @PrimaryKeyFileGroupName = fg.name 
+--FROM sys.indexes i
+--	INNER JOIN sys.tables t ON i.object_id = t.object_id
+--	INNER JOIN sys.data_spaces ds ON i.data_space_id = ds.data_space_id
+--	INNER JOIN sys.filegroups fg ON ds.data_space_id = fg.data_space_id
+--WHERE 
+--    t.name = @MainTableName AND i.is_primary_key = 1;
+
+
+SELECT
+    TOP 1 @PrimaryKeyConstraintName = kc.name
+FROM sys.key_constraints kc
+	INNER JOIN sys.index_columns ic ON kc.parent_object_id = ic.object_id AND kc.unique_index_id = ic.index_id
+	INNER JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id
+	INNER JOIN sys.tables t ON kc.parent_object_id = t.object_id
+WHERE 
+    kc.type = 'PK' AND t.name = @MainTableName;
+
+
+SELECT 
+    @FullTextColumnName = c.name 
+FROM sys.fulltext_indexes fti
+INNER JOIN sys.tables t ON fti.object_id = t.object_id
+INNER JOIN sys.columns c ON t.object_id = c.object_id
+INNER JOIN sys.fulltext_index_columns ftc ON c.object_id = ftc.object_id AND c.column_id = ftc.column_id
+WHERE t.name = @MainTableName AND fti.is_enabled = 1;
+
+IF @FullTextColumnName IS NOT NULL -- Has Full Text Index
+BEGIN
+	SET @SQL_DropFullTextIndex  = 'DROP FULLTEXT INDEX ON [dbo].' + QUOTENAME(@MainTableName) + ';' + @NewLine;
+	SET @SQL_CreateFullTextIndex = 'CREATE FULLTEXT INDEX ON [dbo].' + QUOTENAME(@MainTableName) + ' (' + QUOTENAME(@FullTextColumnName) + ')'
+            + ' KEY INDEX ' + QUOTENAME(@PrimaryKeyConstraintName) + ';' + @NewLine;
+
+END;
+
+SELECT @PartitionColumn_IS_NULLABLE = [IS_NULLABLE], @PartitionColumn_DataType = [DATA_TYPE]
+FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_NAME = @MainTableName
+  AND COLUMN_NAME = @RangePartitionColumn;
+
+IF @PartitionColumn_IS_NULLABLE = 'YES'
+BEGIN
+	DECLARE @DropIndexNames VARCHAR(MAX);
+	SELECT @DropIndexNames  = STRING_AGG(@NewLine + 'DROP INDEX ' + QUOTENAME(i.[name]) + ' ON [dbo].' + QUOTENAME(@MainTableName) + ';' + @NewLine + 'GO' , ' ')
+	FROM sys.indexes i
+	JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id
+	JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id
+	JOIN sys.tables t ON c.object_id = t.object_id
+	WHERE c.name = @RangePartitionColumn AND t.name = @MainTableName;
+
+	SET @DropIndexNames = ISNULL(@DropIndexNames, '') ;
+
+	DECLARE @DropVew VARCHAR(MAX);
+
+	SELECT
+		@DropVew  = STRING_AGG(@NewLine + 'DROP VIEW ' + QUOTENAME(X.SchemaName) +  '.' + QUOTENAME(X.ViewName) + ';' + @NewLine + 'GO', ' '),
+		@SQL_CreateVew = STRING_AGG(@NewLine + OBJECT_DEFINITION(OBJECT_ID(X.ViewName)) + ';' + @NewLine + 'GO' + @NewLine, ' ')
+	FROM (
+	SELECT 
+		DISTINCT SCHEMA_NAME(o.schema_id) AS SchemaName, o.[name] AS ViewName
+	FROM 
+		sys.sql_expression_dependencies d
+	JOIN 
+		sys.objects o ON d.referencing_id = o.object_id
+	JOIN 
+		sys.schemas s ON o.schema_id = s.schema_id
+	WHERE 
+		d.referenced_entity_name = 'B_MASTER_REPOSITORY_ITEM' AND o.[type] = 'V ' AND d.is_schema_bound_reference = 1
+	) X;
+
+	SET @SQL_CreateVew = ISNULL(@SQL_CreateVew, '') ;
+	SET @DropVew = ISNULL(@DropVew, '') ;
+
+	SET @SQL_CreateClusteredIndex = @SQL_CreateClusteredIndex + @NewLine + @DropIndexNames + @NewLine;
+	SET @SQL_CreateClusteredIndex = @SQL_CreateClusteredIndex + @NewLine + @DropVew + @NewLine;
+	SET @SQL_CreateClusteredIndex = @SQL_CreateClusteredIndex + 'UPDATE [dbo].' + QUOTENAME(@MainTableName) + ' SET ' + QUOTENAME(@RangePartitionColumn) + ' = ' + @PartitionColumn_DefaultValue + ' WHERE ' + + QUOTENAME(@RangePartitionColumn) + ' IS NULL;' + @NewLine;
+	SET @SQL_CreateClusteredIndex = @SQL_CreateClusteredIndex + 'ALTER TABLE [dbo].' + QUOTENAME(@MainTableName) + ' ALTER COLUMN ' + QUOTENAME(@RangePartitionColumn) + ' ' + @PartitionColumn_DataType + ' NOT NULL;' + @NewLine;
+END;
+
+
+SET @SQL_PartitionFunction = @SQL_PartitionFunction + ');' + @NewLine + 'GO' + @NewLine;
+SET @SQL_PartitionScheme = @SQL_PartitionScheme + ');' + @NewLine + 'GO' + @NewLine;
+
+SET @SQL_CreateClusteredIndex = @SQL_CreateClusteredIndex + @NewLine + 'ALTER TABLE [dbo].' + QUOTENAME(@MainTableName) + ' DROP CONSTRAINT ' + QUOTENAME(@PrimaryKeyConstraintName) + ';' + @NewLine + 'GO' + @NewLine;
+SET @SQL_CreateClusteredIndex = @SQL_CreateClusteredIndex + @NewLine + 'ALTER TABLE [dbo].' + QUOTENAME(@MainTableName) + ' ADD  CONSTRAINT ' + QUOTENAME(@PrimaryKeyConstraintName) + ' PRIMARY KEY CLUSTERED (' + QUOTENAME(@PrimaryKeyColumn) + ',' + QUOTENAME(@RangePartitionColumn) + 
+') ON ' + QUOTENAME(@PartitionSchemeName) + '(' + QUOTENAME(@RangePartitionColumn) + ');' + @NewLine + 'GO' + @NewLine;
+--SET @SQL_CreateClusteredIndex = @SQL_CreateClusteredIndex + @NewLine + 'CREATE CLUSTERED INDEX ' + QUOTENAME(@ClusterIndexName) + ' ON [dbo].' + QUOTENAME(@MainTableName) + ' (' + QUOTENAME(@RangePartitionColumn) + ') ON' +
+--                                ' ' + QUOTENAME(@PartitionSchemeName) + '(' + QUOTENAME(@RangePartitionColumn) + ');' + @NewLine + 'GO' + @NewLine;
+
+PRINT  @NewLine +'/* Create FileGroup and File for data */'
+PRINT  @SQL_FileGroup;
+PRINT  @NewLine +'/* Create FileGroup and File for index */'
+PRINT  @NewLine + @SQL_IndexFileGroup;
+PRINT  @NewLine +'/* Create Parition Function and Partition Schema */'
+PRINT  @NewLine + 'USE ' + QUOTENAME(@DatabaseName)  + @NewLine + 'GO';
+PRINT  @NewLine + @SQL_PartitionFunction; 
+PRINT  @NewLine + @SQL_PartitionScheme;
+
+IF @FullTextColumnName IS NOT NULL -- Has Full Text Index
+BEGIN
+PRINT  @NewLine +'/* Drop the Full-Text Index */'
+PRINT  @NewLine + @SQL_DropFullTextIndex;
+END;
+
+PRINT  @NewLine +'/* Re-create Primary Key as Non-Clustered and create a clustered index based on [REPOSITORY_ID] */'
+PRINT  @NewLine + @SQL_CreateClusteredIndex;
+
+PRINT  @NewLine +'/* Re-create Dependancy View */'
+PRINT @NewLine + @SQL_CreateVew;
+
+SELECT
+   @SQL_IndexPartition = string_agg(CAST(@NewLine +'IF EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(''' +table_name +  ''') AND [name] = ''' + index_name +  ''')' + @NewLine  + ' DROP INDEX ' + QUOTENAME(index_name) + ' ON ' + QUOTENAME(SCHEMA_NAME(schema_id)) + '.' + QUOTENAME(table_name) + ';' + @NewLine + 'GO' + @NewLine + ' CREATE ' + [unique] + idx.[type_desc]  +  ' INDEX ' + QUOTENAME(index_name) + ' ON ' 
+            + QUOTENAME(SCHEMA_NAME(schema_id)) + '.' + QUOTENAME(table_name) 
+            + ' ( ' +  key_cols + ' )'
+			+ CASE 
+			     WHEN has_repoid_cols = 0 AND has_repoid_inc_cols = 0 THEN 
+						CASE 
+							WHEN inc_cols IS NULL THEN ' INCLUDE ( ' + QUOTENAME(@RangePartitionColumn) + ' ) '
+							ELSE ' INCLUDE ( ' + inc_cols + ',' + QUOTENAME(@RangePartitionColumn) + ' ) '
+						END
+				 ELSE isnull(' INCLUDE ( ' + inc_cols + ' ) ','') 
+			  END
+            --+ isnull(' INCLUDE ( ' + inc_cols + ' ) ','')
+            + ' WITH (' + [options] + ' )'
+            + ' ON ' + QUOTENAME(@IndexFileGroupName) + ';' +  CHAR(13) + CHAR(10) + 'GO'
+			 AS VARCHAR(MAX)), CHAR(13) + CHAR(10))
+FROM sys.Indexes idx
+    join sys.tables tbl
+        on tbl.object_id = idx.object_ID
+    join sys.stats stat
+        ON  stat.object_id = idx.object_id
+        AND stat.stats_id = idx.index_id
+    JOIN sys.data_spaces dat
+        ON  idx.data_space_id = dat.data_space_id
+    cross apply (Select
+        [Table_name] = OBJECT_NAME(idx.Object_ID)
+    ,   [Table_object_ID] = idx.Object_ID
+    ,   [Index_name] = idx.Name
+    ,   [unique] = case when is_unique = 1 then 'UNIQUE ' else '' end
+
+    ) labels
+    cross apply (Select
+        key_cols = string_agg( key_col_name + CASE when sub_ic.is_descending_key = 1 THEN ' DESC' ELSE ' ASC' END, ', ') collate DATABASE_DEFAULT
+    ,   inc_cols = string_agg(inc_col_name + CASE when sub_ic.is_descending_key = 1 THEN ' DESC' ELSE ' ASC' END, ', ') collate DATABASE_DEFAULT
+	,   has_repoid_cols = sum(case when upper(key_col_name) = @RangePartitionColumn then 1 else 0 end)
+	,   has_repoid_inc_cols = sum(case when upper(inc_col_name) = @RangePartitionColumn then 1 else 0 end)
+        from
+            sys.index_columns sub_ic
+            join sys.columns sub_col
+                on sub_col.object_ID = sub_ic.object_id and sub_col.column_id = sub_ic.column_id
+            cross apply (Select
+                key_col_name = case when is_included_column = 0 then sub_col.name end
+            ,   inc_col_name = case when is_included_column = 1 then sub_col.name end
+            ) key_inc
+        where sub_ic.object_id = idx.object_id and sub_ic.index_id = idx.index_id
+            and is_included_column = 0
+    ) cols
+    cross apply (Select
+        options = string_agg([option] + on_off, ', ')
+        from (values
+          ( 'PAD_INDEX = ' , idx.is_padded)
+        , ( 'FILLFACTOR = ', nullif(idx.fill_factor, 0))
+        , ( 'IGNORE_DUP_KEY = ', idx.ignore_dup_key)
+        , ( 'STATISTICS_NORECOMPUTE = ', stat.no_recompute)
+        , ( 'ALLOW_ROW_LOCKS = ', idx.allow_row_locks)
+        , ( 'ALLOW_PAGE_LOCKS = ', idx.allow_page_locks)
+		, ( 'DROP_EXISTING = ', 0)
+        ) opts([option], val)
+        cross apply (Select
+            on_off = case val when 1 then 'ON' when 0 then 'OFF' else CONVERT( CHAR(5), val) end
+        ) on_off_calc
+    ) options_calc
+
+where idx.name is not null and idx.is_primary_key = 0 and idx.type = 2
+and [table_name] = @MainTableName;
+
+PRINT  @NewLine + '/* Re-Create non-clustered Indexes */';
+PRINT @SQL_IndexPartition;
+
+IF @FullTextColumnName IS NOT NULL -- Has Full Text Index
+BEGIN
+
+PRINT @NewLine + '--RDS SQL Server does not allow to set default FULLTEXT catalog, please go through the following steps to set it:'
+PRINT @NewLine + '--Open SSMS, expand database.'
+PRINT @NewLine + '--Expand Storage.'
+PRINT @NewLine + '--Expand Full Text Catalogs.'
+Print @NewLine + '--Right click catalog (for example: epimcatalog), open Properties'
+Print @NewLine + '--Choose General, change "Default Catalog" from false to True'
+Print @NewLine + '--Uncomment the following query and put the Full Text Index back'
+Print @NewLine + '--  ' + @SQL_CreateFullTextIndex;
+
+END;
+
+SET NOCOUNT OFF;
+
+
+
