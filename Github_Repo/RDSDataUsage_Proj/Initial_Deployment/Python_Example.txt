@@ -1,0 +1,299 @@
+kjB=A*HNK6Zb5tgC
+T}J8z2Pg])-9L$p(
+KC%S?u_9:hAe5J2q
+
+How to query RDS SQL Server from Lambda Function
+"Unable to import module 'lambda_function': No module named 'pyodbc'",
+https://www.youtube.com/watch?v=z7pJ8gR1XZk
+
+AWS Lambda Tutorial connect to MS SQL:
+https://faun.pub/aws-lambda-microsoft-sql-server-how-to-66c5f9d275ed
+
+https://stackoverflow.com/questions/57355418/aws-lambda-connecting-to-sql-with-python-and-pyodbc
+https://gist.github.com/diriver63/b72a954fa0da4851d89e5086aa13c6e8
+
+https://github.com/alexanderluiscampino/lambda-layers/blob/master/pyodbc-9ef8961d-ce5b-4603-b397-03c9a6316eca.zip
+
+--For Lambda Python 3.10
+
+https://github.com/yogendra-kokamkar/python-package-lambda-layers/blob/main/pymssql3.zip
+
+
+-- Add to LambdaFunction:
+https://www.youtube.com/watch?v=iluJFDUh-ck&t=371s
+
+-- Add Lambda Function Layer:
+https://www.youtube.com/watch?v=jXjMrWCpaI8
+
+
+Driver= {'ODBC Driver 17 for SQL Server'}
+
+
+cnxn = pyodbc.connect("Driver={SQL Server};"
+                        "Server=data-migration-source-instance.asasasas.eu-east-1.rds.amazonaws.com;"
+                        "Database=sourcedb;"
+                        "uid=source;pwd=source1234")
+---------
+import pyodbc 
+def lambda_handler(event,context):
+    conn = pyodbc.connect('Driver={ODBC Driver 17 for SQL Server};Server=tcp:xxx.database.windows.net,1433;Database=xxx;Uid=xxx;Pwd=xxx;Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;')
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM xxx')
+
+    for row in cursor:
+        print(row)
+
+------------------
+import logging
+import boto3
+from botocore.exceptions import ClientError
+import os
+
+
+def upload_file(file_name, bucket, object_name=None):
+    """Upload a file to an S3 bucket
+
+    :param file_name: File to upload
+    :param bucket: Bucket to upload to
+    :param object_name: S3 object name. If not specified then file_name is used
+    :return: True if file was uploaded, else False
+    """
+
+    # If S3 object_name was not specified, use file_name
+    if object_name is None:
+        object_name = os.path.basename(file_name)
+
+    # Upload the file
+    s3_client = boto3.client('s3')
+    try:
+        response = s3_client.upload_file(file_name, bucket, object_name)
+    except ClientError as e:
+        logging.error(e)
+        return False
+    return True
+
+-------------------------
+
+# importing the csv module
+import csv
+# field names
+fields = ['Name', 'Branch', 'Year', 'CGPA']
+# data rows of csv file
+rows = [['Nikhil', 'COE', '2', '9.0'],
+        ['Sanchit', 'COE', '2', '9.1'],
+        ['Aditya', 'IT', '2', '9.3'],
+        ['Sagar', 'SE', '1', '9.5'],
+        ['Prateek', 'MCE', '3', '7.8'],
+        ['Sahil', 'EP', '2', '9.1']]
+# name of csv file
+filename = "university_records.csv"
+# writing to csv file
+with open(filename, 'w') as csvfile:
+    # creating a csv writer object
+    csvwriter = csv.writer(csvfile)
+    # writing the fields
+    csvwriter.writerow(fields)
+    # writing the data rows
+    csvwriter.writerows(rows)
+
+-----------------------------
+
+import pymysql
+
+conn = pymysql.connect(
+    host='localhost',
+    user='root',
+    password='password',
+    db='mydatabase',
+    charset='utf8mb4',
+    cursorclass=pymysql.cursors.DictCursor
+)
+
+---
+try:
+    with conn.cursor() as cursor:
+        # Create a new record
+        sql = "INSERT INTO `users` (`email`, `password`) VALUES (%s, %s)"
+        cursor.execute(sql, ('john@example.com', 'mypassword'))
+
+    # Commit changes
+    conn.commit()
+
+    print("Record inserted successfully")
+finally:
+    conn.close()
+----
+
+try:
+    with conn.cursor() as cursor:
+        # Read data from database
+        sql = "SELECT * FROM `users`"
+        cursor.execute(sql)
+
+        # Fetch all rows
+        rows = cursor.fetchall()
+
+        # Print results
+        for row in rows:
+            print(row)
+finally:
+    conn.close()
+----
+
+-----------
+
+-- C:\temp\maincode_redshift_uat
+
+import psycopg2
+import logging
+import boto3
+import os
+import sys
+from datetime import datetime
+from base64 import b64decode
+
+bucketname = os.environ['bucket_name']
+
+host1 = os.environ['host1']
+db_name1 = os.environ['db_name1']
+user1 = boto3.client('kms').decrypt(CiphertextBlob=b64decode(os.environ['user1']))['Plaintext']
+password1 = boto3.client('kms').decrypt(CiphertextBlob=b64decode(os.environ['password1']))['Plaintext']
+port1 = os.environ['port1']
+
+host2 = os.environ['host2']
+db_name2 = os.environ['db_name2']
+user2 = boto3.client('kms').decrypt(CiphertextBlob=b64decode(os.environ['user2']))['Plaintext']
+password2 = boto3.client('kms').decrypt(CiphertextBlob=b64decode(os.environ['password2']))['Plaintext']
+port2 = os.environ['port2']
+
+
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+def process_data():
+    db_attrib = DB_Attribute(host1, db_name1, str(user1), str(password1), port1)
+    quries = Queries("\"userid\",\"slice\",\"tbl\",\"starttime\",\"session\",\"query\",\"filename\",\"line_number\",\"colname\",\"type,col_length\",\"position\",\"raw_line\",\"raw_field_value\",\"err_code\",\"err_reason\"", "SELECT userid, slice, tbl, starttime, session, query, filename, line_number, colname, type,col_length, position, raw_line, raw_field_value, err_code, err_reason FROM stl_load_errors")
+    file_attribute = File_Attribute(bucketname, folder_cercreation(), 'stl_load_errors_d3sixtyprodeuhp_eu')
+    generate_report(db_attrib, quries, file_attribute)
+    
+    quries = Queries("\"tbl\",\"table_name\",\"starttime\",\"input\",\"line_number\",\"colname\",\"err_code\",\"reason\"", "select distinct tbl, trim(name) as table_name, query, starttime, trim(filename) as input, line_number, colname, err_code, trim(err_reason) as reason from stl_load_errors sl left outer join stv_tbl_perm sp on sl.tbl = sp.id")
+    file_attribute = File_Attribute(bucketname, folder_cercreation(), 'stl_load_errors_table_d3sixtyprodeuhp_eu')
+    generate_report(db_attrib, quries, file_attribute)
+    
+    db_attrib = DB_Attribute(host2, db_name2, str(user2), str(password2), port2)
+    quries = Queries("\"userid\",\"slice\",\"tbl\",\"starttime\",\"session\",\"query\",\"filename\",\"line_number\",\"colname\",\"type,col_length\",\"position\",\"raw_line\",\"raw_field_value\",\"err_code\",\"err_reason\"", "SELECT userid, slice, tbl, starttime, session, query, filename, line_number, colname, type,col_length, position, raw_line, raw_field_value, err_code, err_reason FROM stl_load_errors")
+    file_attribute = File_Attribute(bucketname, folder_cercreation(), 'stl_load_errors_d3sixtyprodeureg_eu')
+    generate_report(db_attrib, quries, file_attribute)
+    
+    quries = Queries("\"tbl\",\"table_name\",\"starttime\",\"input\",\"line_number\",\"colname\",\"err_code\",\"reason\"", "select distinct tbl, trim(name) as table_name, query, starttime, trim(filename) as input, line_number, colname, err_code, trim(err_reason) as reason from stl_load_errors sl left outer join stv_tbl_perm sp on sl.tbl = sp.id")
+    file_attribute = File_Attribute(bucketname, folder_cercreation(), 'stl_load_errors_table_d3sixtyprodeureg_eu')
+    generate_report(db_attrib, quries, file_attribute)
+    
+    
+def generate_report(db_attrib, quries, file_attribute):
+    column_delimiter = ','
+    column_textqualifier = '\"'
+    connstr = db_attrib.connstr
+    #result = ""
+    result = []
+    sql_columns = quries.sql_columns
+    sql_content = quries.sql_content
+    
+    result.append(sql_columns)
+    
+    try:
+        conn=psycopg2.connect(connstr)
+    except:
+        #print("I am unable to connect to the database.")
+        print("Unexpected error:", sys.exc_info()[0])
+        raise
+    
+    cur = conn.cursor()
+    
+    try:
+        cur.execute(sql_content)
+    except:
+        print("I can't SELECT from bar")
+
+    rows = cur.fetchall()
+    for row in rows:
+        result.append("\n")
+        i = 0
+        for col in row:
+            if(i > 0):
+                result.append(column_delimiter)
+                result.append(column_textqualifier)
+                result.append(str(col))
+                result.append(column_textqualifier)
+            else:
+                result.append(column_textqualifier)
+                result.append(str(col))
+                result.append(column_textqualifier)
+            i = i + 1
+    
+    #print(result)
+    save_string_to_s3(file_attribute, ''.join(result))
+
+def save_string_to_s3(file_attribute, result):
+    s3 = boto3.resource('s3')
+    object = s3.Object(file_attribute.bucketname, file_attribute.reportfilename)
+    object.put(Body=result)
+
+def folder_cercreation():
+    return datetime.today().strftime('%Y_%m_%d')
+
+def lambda_handler(event, context):
+    process_data()
+    
+class DB_Attribute:
+    def __init__(self, host, db_name, user, password, port):
+        self.host = host
+        self.db_name = db_name
+        self.user = user.replace("b'", "").replace("'", "")
+        self.password = password.replace("b'", "").replace("'", "")
+        self.port = port
+        self.connstr = "host='" + self.host + "' dbname='" + self.db_name + "' user='" + self.user + "' password='" + self.password + "' port='" + str(self.port) + "'"
+    
+class Queries():
+    def __init__(self, columns, sql_content):
+        self.sql_columns = columns
+        self.sql_content = sql_content
+
+class File_Attribute:
+    def __init__(self, bucketname, filepath, reportname):
+        self.bucketname = bucketname
+        self.reportname = reportname
+        self.reportfilename = filepath + '/' + self.reportname + '.csv'
+        
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
