@@ -1,0 +1,113 @@
+
+RDS Database upgrade contains 2 major steps.
+
+1. Mock up upgrade. Following the steps listed in current document.
+2. Actual upgrade. Following the steps listed in Product_RDS_Database_Upgrade_Steps.txt.
+
+
+---------------------------------
+Section I   Create snapshot (equivalent to full DB backup) and restore to mock up database in different end point.
+---------------------------------
+
+1. Login AWS.
+2. RDS Dashboard --> Snapshots --> Create Snapshot
+3. Restore database by following the instructions in WIKI page (http://wikidev:8090/display/iiTAP/Full+Restore+RDS+database). Please note this step could take 2 to 7 hours.
+
+---------------------------------
+Section II   Check the product version before upgrade.
+---------------------------------
+
+1. Login to database through SQL Developer or use SQLPLUS through command line.
+2. Run the following SQL command and see the expected result.
+
+SQL>SELECT * FROM IAUSER.VERSIONDATA;
+SOLUTIONVERSION MIGRATIONSTEP
+8.2             0
+
+SQL>SELECT * FROM ERUSER.VERSIONDATA;
+SOLUTIONVERSION MIGRATIONSTEP
+4.3             0
+
+SQL>SELECT * FROM IIUSER.VERSIONDATA;
+SOLUTIONVERSION MIGRATIONSTEP
+8.2             0
+
+SQL>SELECT * FROM IVUSER.VERSIONDATA;
+SOLUTIONVERSION MIGRATIONSTEP
+3.3             0
+
+---------------------------------
+Section III   Create a database snapshot and reboot the database.
+---------------------------------
+
+1. Create new snapshot on database before upgrade.
+2. Reboot database before upgrade.
+3. Write down the time before upgrade. We might need this time for point-in-time restore if the database upgrade failed.
+
+---------------------------------
+Section IV   Build each product need to be released (Please note this step will repeat for each Product)
+---------------------------------
+
+1. Must re-create {InsdeSchema}.SESSION_KEY if upgrade inside from Version 8.3 to any later version, 
+   
+   SQL> DROP TABLE {InsdeSchema}.SESSION_KEY;
+   SQL> COMMIT;
+
+2. Process regular build process till step "gen-upgrade-db.bat {Product}" has finished successul. At this point the upgrade script files will be generated.
+
+3. Upgrade tablespace. Please note it requires system privilege to upgrade tablespace. 
+   Pleas note that the syntax is different in RDS: CREATE TABLESPACE {TABLESPACE_NAME} DATAFILE SIZE 100M AUTOEXTEND ON NEXT 100M EXTENT MANAGEMENT LOCAL AUTOALLOCATE SEGMENT SPACE MANAGEMENT AUTO; ALTER USER {SCHEMA_NAME}  QUOTA UNLIMITED ON {TABLESPACE_NAME}; COMMIT; 
+   $ sudo -s
+   $ su - oracle
+   $ $ORACLE_HOME/bin/sqlplus -S SYSTEM/${SYSTEM_PASSWORD}@DBName @{Updatefolder}/Infogix/db/{Product}/schema/oracle/advanced/upgrade-tablespaces.sql
+
+4. Upgrde table/column. Please note it requires login as user level to execute the script.
+   /* ProductUserName user to upgrade tables */
+   $ $ORACLE_HOME/bin/sqlplus -S {ProductUserName}/${PASSWORD}@DBName @{Updatefolder}/Infogix/db/{Product}/schema/oracle/advanced/upgrade-schema-tables.sql
+
+5. Run command line script.
+   $ upgrade-db.bat {Product}
+
+6. Upgrde version information. Please note it requires login as user level to execute the script.
+   /* ProductUserName user to upgrade table schema */
+   $ $ORACLE_HOME/bin/sqlplus -S {ProductUserName}/${PASSWORD}@DBName @{Updatefolder}/Infogix/db/{Product}/schema/oracle/advanced/upgrade-schema-tables-finish.sql
+
+7. Run command line script to set product information. Till this point, database upgrade is done.
+   $ upgrade-db-finish.bat {Product}
+
+8. If upgrade database successful, continue the rest of the prodcut build steps including deployment and starting product services.
+
+---------------------------------
+Section V   If Upgrade fail, restore snapshot
+---------------------------------
+
+1. Do a point-in-time database restore by following the instructions listed on WIKI page (http://wikidev:8090/display/iiTAP/Point-in-time+restore+RDS+instance). 
+
+---------------------------------
+Section VI   If Upgrade successful, create snapshot gain.
+---------------------------------
+
+1. Login AWS.
+2. RDS Dashboard --> Snapshots --> Create Snapshot
+
+---------------------------------
+Section VII   Check product version
+---------------------------------
+
+1. Run the following SQL command and see the expected result.
+
+SQL>SELECT * FROM IAUSER.VERSIONDATA;
+SOLUTIONVERSION MIGRATIONSTEP
+8.4             0
+
+SQL>SELECT * FROM ERUSER.VERSIONDATA;
+SOLUTIONVERSION MIGRATIONSTEP
+4.5             0
+
+SQL>SELECT * FROM IIUSER.VERSIONDATA;
+SOLUTIONVERSION MIGRATIONSTEP
+8.4             0
+
+SQL>SELECT * FROM IVUSER.VERSIONDATA;
+SOLUTIONVERSION MIGRATIONSTEP
+3.5             0

@@ -1,0 +1,360 @@
+
+
+
+---------------------------------------------------------
+-- Practice schedule: the middle of the month.
+-- Database Server: Do not practice database restore on Production database. 
+--                  Only run database restore validation on Production database monthly (Section One).
+--                  Practice database restore on Testing database on quarterly base.
+--                  Practice database restore on Dev database on monthly base when not practicing on Testing database.
+-- Note: 
+--       1. If the production database need to be restored. Refer to Production_DB_Restore_Steps.txt.
+--       2. We practice the worst senario that will be the files are corrupted on both Oracle data folder and flash_recovery_area. 
+--       3. If the backup files in flash_recovery_area kept intact. The process will be simple.
+--       4. Point-In-Time recovery can only apply to the point after the previous time of resetlogs.                 
+---------------------------------------------------------
+
+
+*********************************************************
+------------------- Section One -------------------------
+--------------- Database validation ---------------------
+*********************************************************
+
+-- Database backup and restore validation
+-- There is no change will be made to database in this section
+-- There is no risk to run the script in this section.
+---------------------------------------------------------
+
+RMAN> validate database;
+RMAN> restore database validate;
+-- We might see missiong archivelog error on Dev/Test DB due to PIT recovery practive
+RMAN> RESTORE ARCHIVELOG ALL VALIDATE;
+
+
+*********************************************************
+------------------- Section Two -------------------------
+------------- Preparation for practice ------------------
+*********************************************************
+
+---------------------------------------------------------
+-- Practice preparation I: create testing records.
+-- Usually practice DB restoring in the middle of the month. 
+-- The data can be lost after starting the practice preparation. 
+---------------------------------------------------------
+
+Step 1.0: We only practice database restore on Development/Test database!
+Step 1.1: Send out email to inform the people that can get affected.
+Step 1.2: Create user, tablespace and table for testing:
+Step 1.3: Insert the first testing record with timestamp.
+
+          Example:
+          [root@ip-172-26-9-95 jou]# sudo -s
+          [root@ip-172-26-9-95 jou]# su - oracle
+          [oracle@ip-172-26-9-95 ~]$ cd $ORACLE_HOME/bin
+          [oracle@ip-172-26-9-95 bin]$ export ORACLE_SID={DBName}
+          [oracle@ip-172-26-9-95 bin]$ ./sqlplus / as sysdba
+
+          SQL*Plus: Release 12.1.0.1.0 Production on Wed Oct 15 16:19:27 2014
+
+          Copyright (c) 1982, 2013, Oracle.  All rights reserved.
+
+          Connected to:
+          Oracle Database 12c Release 12.1.0.1.0 - 64bit Production
+
+
+          SQL> CREATE TABLESPACE tblspace_test DATAFILE  '/opt/oradata/data/{Environment}/data/{DBName}/oradata/{DBName}/tblspace_test.dbf' SIZE 100M REUSE AUTOEXTEND ON NEXT 100M EXTENT MANAGEMENT LOCAL AUTOALLOCATE SEGMENT SPACE MANAGEMENT AUTO;
+
+          Tablespace created.
+
+          SQL> CREATE USER tblspace_user IDENTIFIED BY tblspace_user;
+
+          User created.
+
+          SQL> GRANT UNLIMITED TABLESPACE TO tblspace_user;
+
+          Grant succeeded.
+
+          SQL> CREATE TABLE tblspace_user.BU_TEST (time TIMESTAMP) TABLESPACE tblspace_test;
+
+          Table created.
+
+          SQL> COMMIT;
+
+          Commit complete.
+
+          SQL> INSERT INTO tblspace_user.BU_TEST SELECT SYSTIMESTAMP FROM DUAL;
+
+          1 row created.
+
+          SQL> COMMIT;
+
+          Commit complete.
+          
+          SQL> select * from tblspace_user.BU_TEST;
+
+          TIME
+          ---------------------------------------------------------------------------
+          15-OCT-14 11.24.53.329948 AM
+
+Step 1.4: After a while, usually one hour later, add another testing records. There are 2 testing records at this point.
+
+          SQL> INSERT INTO tblspace_user.BU_TEST SELECT SYSTIMESTAMP FROM DUAL;
+
+          1 row created.
+
+          SQL> COMMIT;
+
+          Commit complete.
+          
+          SQL> select * from tblspace_user.BU_TEST;
+
+          TIME
+          ---------------------------------------------------------------------------
+          15-OCT-14 04.01.53.329948 PM
+          15-OCT-14 05.05.55.249835 PM
+
+
+---------------------------------------------------------
+-- Practice preparation II: Final Backup before testing.
+-- Usually do this part after 6 PM. 
+-- The data can be lost after starting the practice preparation. 
+---------------------------------------------------------
+
+Step 2.1: Make sure disk space is enough for testing restoring. There is additional 20% disk space need for /opt/oradata/data and /opt/oradata/flash
+
+          Example:
+          [oracle@ip-172-26-9-95 bin]$ df -h
+          Filesystem      Size  Used Avail Use% Mounted on
+          /dev/xvda1       20G  3.0G   17G  16% /
+          /dev/xvdb1       50G  5.3G   45G  11% /u01
+          /dev/xvdd       247G   32G  203G  14% /opt/oradata/data
+          /dev/xvdf       247G   85G  149G  37% /opt/oradata/flash
+          tmpfs            32G  7.1G   25G  23% /dev/shm
+
+Step 2.2: Force the update written to archive log. We need repeat it before each database backup and shutting down during the practice.
+          SQL> alter system archive log current;
+
+Step 2.3: Run a backup and check log file (using root). 
+          $ /opt/igx/scripts/backup_oracle.sh '{DBName}' 'compressed'
+          $ more /tmp/rman_{DBName}.log
+
+Step 2.4: If there is no error on previous step, copy the files to S3 (using root).
+          $ /opt/igx/scripts/copy_flash_recovery_area_to_from_s3.sh 'copy-files-to-s3' '{Environment}' '{DBName}'
+
+Step 2.5: Check the S3 folder to make sure the most recent backup files are copyied over.
+          S3: /All Buckets/db-backups-infogix-com/{Environment}/backupset/2014_10_15 (Current day)
+
+
+Step 2.6: Restart the database. Allow archive log written properly.
+
+          Example:
+          -------------------------------------------------------------------------
+          SQL>shutdown immediate;
+          SQL>startup mount;
+          SQL>alter database open;
+
+*********************************************************
+------------------- Section Three -----------------------
+-------- Database restore/recovery practice--------------
+*********************************************************
+
+---------------------------------------------------------
+-- Practice preparation III: Create worst senation - removing data folder and flash_recovery_area.
+-- Assuming Amazon S3 will never be corrupted at the same time.
+-- 
+---------------------------------------------------------
+
+Step 3.1: Please do not do this step on production database! Rename datafile folder under data folder.
+          Current folder name: /opt/oradata/data/{Environment}/data/{DBName}/oradata/{DBName}
+          Change folder name to: /opt/oradata/data/{Environment}/data/{DBName}/oradata/{DBName}_test
+
+          Example:
+          $ mv /opt/oradata/data/{Environment}/data/{DBName}/oradata/{DBName} /opt/oradata/data/{Environment}/data/{DBName}/oradata/{DBName}_test
+
+
+Step 3.2: Please do not do this step on production database! Rename folder name under flash_recovery_area.
+          Current folder name: /opt/oradata/flash/{DBName}/flash_recovery_area/{DBName}
+          Change folder name to: /opt/oradata/flash/{DBName}/flash_recovery_area/{DBName}_test
+
+          Example:
+          $ mv /opt/oradata/flash/{DBName}/flash_recovery_area/{DBName} /opt/oradata/flash/{DBName}/flash_recovery_area/{DBName}_test
+
+
+Step 3.3: Confirm that the database will have problem since the data folder no longer available.
+          
+
+          Example:
+          -------------------------------------------------------------------------
+          [root@ip-172-26-9-95 jou]# sudo -s
+          [root@ip-172-26-9-95 jou]# su - oracle
+          [oracle@ip-172-26-9-95 ~]$ cd $ORACLE_HOME/bin
+          [oracle@ip-172-26-9-95 bin]$ export ORACLE_SID={DBName}
+          [oracle@ip-172-26-9-95 bin]$ ./sqlplus / as sysdba
+
+          SQL*Plus: Release 12.1.0.1.0 Production on Wed Oct 15 16:19:27 2014
+
+          Copyright (c) 1982, 2013, Oracle.  All rights reserved.
+
+          connected to
+
+          SQL> shutdown immediate;
+          ORA-01116: error in opening database file 1
+          ORA-01110: data file 1: '/opt/oradata/data/{Environment}/data/{DBName}/oradata/{DBName}/datafile/o1_mf_system_b2d59kb4_.dbf'
+          ORA-27041: unable to open file
+          Linux-x86_64 Error: 2: No such file or directory
+          Additional information: 3
+
+Step 3.4: Copy file from S3 to flash_recovery_area (this might take 15 minutes) (using root). 
+          $ /opt/igx/scripts/copy_flash_recovery_area_to_from_s3.sh 'copy-files-from-s3' '{Environment}' '{DBName}'
+
+Step 3.5: Confirm the folder owner is "oracle" and in group "oinstall".
+          $ ls /opt/oradata/flash/{DBName}/flash_recovery_area/{DBName} -l
+          $ ls /opt/oradata/flash/{DBName}/flash_recovery_area -l
+          If the permission is not correct, need to change
+          $ chown -R oracle /opt/oradata/flash/{DBName}/flash_recovery_area
+          $ chgrp -hR oinstall /opt/oradata/flash/{DBName}/flash_recovery_area
+
+---------------------------------------------------------
+-- Restoration practice: Full restore/recovery
+-- This step will recover the data to the newest stage available.
+-- 
+---------------------------------------------------------
+
+Step 4.1: Restore database. First shutdown database and then run restore/recove database command:
+          RMAN> SHUTDOWN ABORT
+          RMAN> RUN {
+		STARTUP MOUNT;
+		RESTORE DATABASE;
+                RECOVER DATABASE;
+                ALTER DATABASE OPEN;
+		}
+	
+          Example:
+          -------------------------------------------------------------------------  
+          [oracle@ip-172-26-9-95 bin]$ sudo -s
+          [root@ip-172-26-9-95 bin]# su - oracle
+          [oracle@ip-172-26-9-95 ~]$ cd $ORACLE_HOME/bin
+          [oracle@ip-172-26-9-95 bin]$ export ORACLE_SID={DBName}
+          [oracle@ip-172-26-9-95 bin]$ ./rman target /
+
+          Recovery Manager: Release 12.1.0.1.0 - Production on Fri Oct 15 19:31:23 2014
+
+          Copyright (c) 1982, 2013, Oracle and/or its affiliates.  All rights reserved.
+
+          connected to target database: {DBName} (DBID=815013761)
+
+          RMAN> SHUTDOWN ABORT
+
+          RMAN> RUN {
+		STARTUP MOUNT;
+		RESTORE DATABASE;
+                RECOVER DATABASE;
+                ALTER DATABASE OPEN;
+		}
+
+Step 4.2: Verity that 2 records (before the latest backup) exists in table tblspace_user.BU_TEST.
+
+          Example
+          SQL> select * from tblspace_user.BU_TEST;
+
+	  TIME
+          ---------------------------------------------------------------------------
+          15-OCT-14 04.01.53.329948 PM
+          15-OCT-14 05.05.55.249835 PM
+
+Step 4.3: Run level 0 backup (equivalent to full backup) and confirm there is no error displayed.
+
+          RMAN> run {
+          ALLOCATE CHANNEL OEM_DISK_BACKKUP DEVICE TYPE DISK;
+          BACKUP INCREMENTAL LEVEL=0 DATABASE TAG 'Increment_BU' PLUS ARCHIVELOG;
+          }
+
+
+---------------------------------------------------------
+-- Practice Point-in-time restore/recovery
+-- Choose the time between the first 2 records.
+-- Example: choose the time between "15-OCT-14 04.01.53.329948 PM" and "15-OCT-14 05.05.55.249835 PM"
+---------------------------------------------------------
+
+
+Step 5.1: Restore database to the point right after the first testing record time (15-OCT-14 11.24.53.329948 AM). First shutdown database and then run restore/recove database:
+          RMAN> shutdown abort
+          RMAN> run {
+		STARTUP MOUNT;
+		RESTORE DATABASE UNTIL TIME "to_date('2014-10-15 17:00:00','yyyy-mm-dd hh24:mi:ss')";
+                RECOVER DATABASE UNTIL TIME "to_date('2014-10-15 17:00:00','yyyy-mm-dd hh24:mi:ss')";
+		ALTER DATABASE OPEN RESETLOGS;
+		}
+	
+          Example:
+          -------------------------------------------------------------------------
+          [oracle@ip-172-26-9-95 bin]$ sudo -s
+          [root@ip-172-26-9-95 bin]# su - oracle
+          [oracle@ip-172-26-9-95 ~]$ cd $ORACLE_HOME/bin
+          [oracle@ip-172-26-9-95 bin]$ export ORACLE_SID={DBName}
+          [oracle@ip-172-26-9-95 bin]$ ./rman target /
+
+          Recovery Manager: Release 12.1.0.1.0 - Production on Fri Oct 15 19:11:22 2014
+
+          Copyright (c) 1982, 2013, Oracle and/or its affiliates.  All rights reserved.
+
+          connected to target database: {DBName} (DBID=815013761)
+
+          RMAN> shutdown abort
+
+          RMAN> run {
+		STARTUP MOUNT;
+		RESTORE DATABASE UNTIL TIME "to_date('2014-10-15 17:00:00','yyyy-mm-dd hh24:mi:ss')";
+                RECOVER DATABASE UNTIL TIME "to_date('2014-10-15 17:00:00','yyyy-mm-dd hh24:mi:ss')";
+		ALTER DATABASE OPEN RESETLOGS;
+		}
+
+Step 5.2: Verity that only the first record exists in testing table tblspace_user.BU_TEST. And we won't see the third record.
+
+          Example
+          -------------------------------------------------------------------------
+          SQL> select * from tblspace_user.BU_TEST;
+
+          TIME
+          ---------------------------------------------------------------------------
+          15-OCT-14 04.01.53.329948 PM
+          
+
+---------------------------------------------------------
+-- Keep a full backup after practice.
+-- 
+-- 
+---------------------------------------------------------
+
+Step 6.1: Keep a level 0 backup (full backup)
+
+          RMAN> run {
+            ALLOCATE CHANNEL OEM_DISK_BACKKUP DEVICE TYPE DISK;
+            BACKUP INCREMENTAL LEVEL=0 DATABASE TAG 'Increment_BU' PLUS ARCHIVELOG;
+          }
+
+Step 6.2: Validate database
+          RMAN>validate database;
+          
+---------------------------------------------------------
+-- Clean up day
+-- Clean up the testing data 1 week after practice day.
+---------------------------------------------------------          
+
+Step 7.1: A week later, Remove the testing objects including table, tablespace and testing user.
+
+	  Example:
+          SQL> drop table tblspace_user.BU_TEST;
+          SQL> commit;
+          SQL> alter tablespace tblspace_test offline;
+          SQL> drop tablespace tblspace_test including contents and datafiles;
+          SQL> commit;
+          SQL> drop user tblspace_user;
+          SQL> commit;
+
+Step 7.2: A week later, Remove the old file folder.
+
+          Example:
+          \rm -rf /opt/oradata/data/{Environment}/data/{DBName}/oradata/{DBName}_test
+          \rm -rf /opt/oradata/flash/{DBName}/flash_recovery_area/{DBName}_test
+

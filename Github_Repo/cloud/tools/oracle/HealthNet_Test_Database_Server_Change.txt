@@ -1,0 +1,49 @@
+
+-----------------
+Initial setting
+-----------------
+
+hntest.c93ql9z7excz.us-west-2.rds.amazonaws.com
+
+DB Engine: oracle-se1
+License Model: license-included
+DB Engine Version: 11.2.0.4.v3
+DB Instance Clase: m3.large -- 2 vCPU, 7.5GB RAM
+Multi-AZ Deployment: No
+Storage Type: General Purpose (SSD)
+Allocated Storage: 100 GB
+DB Instance Identifier: HNTEST
+Master Username: awsrdsuser
+Master Password: 
+
+
+-------------------------------
+Change made after initial setting:
+-------------------------------
+
+1. Make sure storage using Provisioned IOPS(SSD) for Production. For Test environment, we only need General Purpose (SSD).
+
+2. Add on option group with TIME_ZONE= US/Eastern on RDS management console. And attach option with "hntest" instance.
+
+3. Please note that change "FILESYSTEMIO_OPTIONS" is not allowed in RDS. 
+
+   SQL> SHOW PARAMETER FILESYSTEMIO_OPTIONS
+
+   SQL> ALTER SYSTEM SET FILESYSTEMIO_OPTIONS=none SCOPE=SPFILE;
+
+4. Add log files. There 4 Group by default. We need to add 3 additional group. Change the file size from 138M to 200M.
+   
+   SQL> select GROUP#, BYTES, STATUS from v$log;
+   SQL> exec rdsadmin.rdsadmin_util.add_logfile(209715200);
+
+   SQL> select GROUP#, BYTES, STATUS from v$log; 
+
+   # Now, drop each INACTIVE log using the group#.
+   SQL> exec rdsadmin.rdsadmin_util.drop_logfile(1);
+   SQL> select GROUP#, BYTES, STATUS from v$log;
+
+   # Switch logs so that group 2 is no longer current:
+   SQL>exec rdsadmin.rdsadmin_util.switch_logfile;
+
+   # Issue a checkpoint to clear log 2
+   SQL>exec rdsadmin.rdsadmin_util.checkpoint;

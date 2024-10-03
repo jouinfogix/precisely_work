@@ -1,0 +1,120 @@
+
+
+Changes on DB server after default configuraton:
+1. Increase the size to 16G on /dev/shm
+2. change filesystem name to tmpfs for /dev/shm
+3. Increase the size to 500G on /opt/oradata/data
+4. Increase the size to 750G on /opt/oradata/flash
+5. Increase the memory size to 32G 
+6. Did not change the number of CPU. It kept as 8.
+7. Change the database setting on PFile.ora. 
+   The file for each database checked in Source control:
+   svn://svnrepo/trunk/cloud/Customer/IBC/pfileIBCPRODDB.ora
+   svn://svnrepo/trunk/cloud/Customer/IBC/pfileIBCTESTDB.ora
+   svn://svnrepo/trunk/cloud/Customer/IBC/pfileIBCDEVDB.ora
+
+   Detailed changes on database setting:
+   The maximum disk space for flash_recovery_area:
+   500 G - IBCPRODDB
+   100 G - IBCTESTDB 
+   100 G - IBCDEVDB  
+
+   Number of CPU:
+   1  - OS
+   1  - IBCDEVDB
+   2  -  IBCTESTDB
+   4  -  IBCPRODDB
+
+   Memory (GB):
+   4  -  IBCDEVDB
+   4  -  IBCTESTDB
+   8  -  IBCPRODDB
+   Rest - OS
+
+8. Change database rman setting on configure_rman.rman
+   For IBCPRODDB:
+   configure retention policy to recovery window of 7 days;
+   configure archivelog deletion policy to backed up 1 times to device type disk;  
+   For IBCTESTDB:
+   configure retention policy to recovery window of 2 days;
+   configure archivelog deletion policy to backed up 1 times to device type disk; 
+   For IBCDEVDB:
+   configure retention policy to recovery window of 2 days;
+   configure archivelog deletion policy to backed up 1 times to device type disk;  
+
+9. Database server keep EST timezone. Crontab job and DefaultMaintance schedule changed accordingly.
+Default Maintenance on IBCPRODDB: Weekday->03:00AM, Weekend->06:00AM.
+Default Maintenance on IBCTESTDB: Weekday->08:30PM, Weekend->08:30PM.
+Default Maintenance on IBCDEVDB:  Weekday->07:30PM, Weekend->07:30PM. 
+      
+[root@ip-172-26-9-95 log]# crontab -l
+TZ=EST
+*/15 * * * * /opt/aws-scripts-mon/mon-put-instance-data.pl --aws-credential-file=/opt/aws-scripts-mon/awscreds.template --disk-space-util --disk-path=/opt/oradata/data --from-cron
+*/15 * * * * /opt/aws-scripts-mon/mon-put-instance-data.pl --aws-credential-file=/opt/aws-scripts-mon/awscreds.template --disk-space-util --disk-path=/opt/oradata/flash --from-cron
+*/15 * * * * /opt/aws-scripts-mon/mon-put-instance-data.pl --aws-credential-file=/opt/aws-scripts-mon/awscreds.template --disk-space-util --disk-path=/ --from-cron
+00 00 * * * /opt/igx/scripts/backup_oracle.sh 'IBCPRODDB' ''
+00 01 * * * /opt/igx/scripts/backup_oracle.sh 'IBCTESTDB' 'compressed'
+00 02 * * * /opt/igx/scripts/backup_oracle.sh 'IBCDEVDB' 'compressed'
+40 18 * * * /opt/igx/scripts/reclaim_database_space.sh 'IBCPRODDB'
+20 18 * * * /opt/igx/scripts/reclaim_database_space.sh 'IBCTESTDB'
+00 18 * * * /opt/igx/scripts/reclaim_database_space.sh 'IBCDEVDB'
+*/20 * * * * /opt/igx/scripts/iostatRecord.sh '/tmp/iostatOutput.txt'
+
+10. Check Database Collation
+    Check the database collation NLS_CHARACTERSET set to AL32UTF8.
+    Check the database collation NLS_NCHAR_CHARACTERSET set to AL16UTF16
+    Example:
+    SQL> SELECT PARAMETER, VALUE FROM NLS_DATABASE_PARAMETERS;
+
+11. Mount new volumn for backup: 
+    /opt/oradata/backupset/
+    
+    Create folders and assign permission:
+    $ mkdir /opt/oradata/backupset/IBCDEVDB/
+    $ mkdir /opt/oradata/backupset/IBCTESTD/
+    $ mkdir /opt/oradata/backupset/IBCPRODD/
+    
+    
+    $ chown -R oracle /opt/oradata/backupset/IBCDEVDB/
+    $ chgrp -hR oinstall /opt/oradata/backupset/IBCDEVDB/
+    
+    $ chown -R oracle /opt/oradata/backupset/IBCTESTD/
+    $ chgrp -hR oinstall /opt/oradata/backupset/IBCTESTD/
+    
+    $ chown -R oracle /opt/oradata/backupset/IBCPRODD/
+    $ chgrp -hR oinstall /opt/oradata/backupset/IBCPRODD/
+    
+    Apply the following changes to 3 databases:
+    
+    RMAN> configure controlfile autobackup format for device type disk to '/opt/oradata/backupset/%d/%F';
+    RMAN> configure channel device type disk format '/opt/oradata/backupset/%d/bu_%T_%s_%U_.bkp';
+    
+12. Add additional redo log group AND change all the file size from 50M to 200M:
+    
+    ALTER DATABASE ADD LOGFILE GROUP 1 (
+      '/opt/oradata/data/{Environment}/redo1/{DBName}/{DBName}/onlinelog/redo_{DBName}_g1_m1.log') 
+    SIZE 500M;
+    
+    ALTER DATABASE ADD LOGFILE GROUP 2 (
+          '/opt/oradata/data/{Environment}/redo1/{DBName}/{DBName}/onlinelog/redo_{DBName}_g2_m1.log') 
+        SIZE 500M;
+    
+    ALTER DATABASE ADD LOGFILE GROUP 3 (
+          '/opt/oradata/data/{Environment}/redo1/{DBName}/{DBName}/onlinelog/redo_{DBName}_g3_m1.log') 
+        SIZE 500M;
+    
+    ALTER DATABASE ADD LOGFILE GROUP 4 (
+          '/opt/oradata/data/{Environment}/redo1/{DBName}/{DBName}/onlinelog/redo_{DBName}_g4_m1.log') 
+        SIZE 500M;
+    
+    ALTER DATABASE ADD LOGFILE GROUP 5 (
+      '/opt/oradata/data/{Environment}/redo1/{DBName}/{DBName}/onlinelog/redo_{DBName}_g5_m1.log') 
+    SIZE 500M;
+    
+    ALTER DATABASE ADD LOGFILE GROUP 6 (
+      '/opt/oradata/data/{Environment}/redo1/{DBName}/{DBName}/onlinelog/redo_{DBName}_g6_m1.log') 
+    SIZE 500M;
+    
+    ALTER DATABASE ADD LOGFILE GROUP 7 (
+      '/opt/oradata/data/{Environment}/redo1/{DBName}/{DBName}/onlinelog/redo_{DBName}_g7_m1.log') 
+    SIZE 500M;
